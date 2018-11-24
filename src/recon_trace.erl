@@ -627,6 +627,8 @@ format_trace_output(true, Args) when is_list(Args) ->
             L = lists:map(fun(A) -> format_trace_output(true, A) end, Args),
             [$[, join(", ", L), $]]
     end;
+format_trace_output(true, #{mongoose_acc := true} = Acc) ->
+    ["Acc:", format_trace_output(true, recon_rec:process_acc(Acc))];
 format_trace_output(true, Args) when is_map(Args) ->
     ItemList = maps:to_list(Args),
     ["#{",

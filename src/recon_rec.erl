@@ -16,6 +16,7 @@
 
 -export([is_active/0]).
 -export([import/1, format_tuple/1, clear/1, clear/0, list/0, get_list/0, limit/3]).
+-export([limit/1, limit/2, process_acc/1]).
 
 -ifdef(TEST).
 -export([lookup_record/2]).
@@ -81,7 +82,21 @@ list() ->
 get_list() ->
     ensure_table_exists(),
     Lst = lists:map(fun make_list_entry/1, ets:tab2list(ets_table_name())),
-    lists:sort(Lst).
+    Lst1 = lists:filter(fun(I) -> I /= false end, Lst),
+    lists:sort(Lst1).
+
+%% @doc set limits for accumulator
+limit(mongoose_acc, Limit) ->
+    ensure_table_exists(),
+    ets:insert(ets_table_name(), {{mongoose_acc, -1}, Limit}).
+
+%% @doc get limits for accumulator
+limit(mongoose_acc) ->
+    ensure_table_exists(),
+    case lookup_record(mongoose_acc, -1) of
+        [] -> not_set;
+        [{{mongoose_acc, -1}, AccDef}] -> AccDef
+    end.
 
 %% @doc Limit output to selected fields of a record (can be 'none', 'all', a field or a list of fields).
 %% Limit set to 'none' means there is no limit, and all fields are displayed; limit 'all' means that
@@ -99,16 +114,27 @@ limit(Name, Arity, Limit) ->
 
 %% @private if a tuple is a known record, formats is as "#recname{field=value}", otherwise returns
 %% just a printout of a tuple.
+format_tuple(Tuple) when element(1, Tuple) == set ->
+    ["set:", recon_trace:format_trace_output(true, sets:to_list(Tuple))];
 format_tuple(Tuple) ->
     ensure_table_exists(),
     First = element(1, Tuple),
     format_tuple(First, Tuple).
+
+process_acc(Acc) ->
+    Acc1 = maps:remove(mongoose_acc, Acc),
+    case lookup_record(mongoose_acc, -1) of
+        [{{mongoose_acc, -1}, AccDef}] -> strip_acc(AccDef, Acc1);
+        _ -> Acc1
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% PRIVATE
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
+make_list_entry({{mongoose_acc, -1}, Limits}) ->
+    false;
 make_list_entry({{Name, _}, Fields, Module, Limits}) ->
     FmtLimit = case Limits of
                    [] -> none;
@@ -241,6 +267,26 @@ apply_limits(List, Field) when is_atom(Field) ->
     [{Field, proplists:get_value(Field, List)}, {more, '...'}];
 apply_limits(List, Limits) ->
     lists:filter(fun({K, _}) -> lists:member(K, Limits) end, List) ++ [{more, '...'}].
+
+
+%%%%%%%%%%%%%%%%%%%
+%%% ACCUMULATOR %%%
+%%%%%%%%%%%%%%%%%%%
+
+strip_acc(none, Acc) ->
+    Acc;
+strip_acc(all, _Acc) ->
+    #{};
+strip_acc(Fields, Acc) ->
+    maps:from_list(lists:foldl(fun(F, Flist) -> get_value_from_acc(F, Acc, Flist) end, [], Fields)).
+
+get_value_from_acc(F, Acc, Flist) ->
+    case maps:is_key(F, Acc) of
+        true ->
+            [{F, maps:get(F, Acc)} | Flist];
+        false ->
+            Flist
+    end.
 
 %%%%%%%%%%%%%%%
 %%% HELPERS %%%
