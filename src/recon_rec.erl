@@ -8,6 +8,16 @@
 %%% records may be wrongly labelled. You can manipulate your definition list by
 %%% using import/1 and clear/1, and check which definitions are in use by executing
 %%% list/0.
+%%%
+%%% In this version, it also handles formatting accumulators - if it is active, it prints out
+%%% accumulator as map prefixed with "Acc", and you can limit output fields by calling
+%%% limit/2, and check accumulator limits by calling limit/1.
+%%%
+%%% As an acc limit you can give a list of acc fields like [origin_pid, stanza], and you can
+%%% also use namespaces, like [{c2s}].
+%%%
+%%% As an added bonus, sets are also nicely formatted, so non_strippable become readable.
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(recon_rec).
@@ -25,8 +35,10 @@
 % basic types
 -type field() :: atom().
 -type record_name() :: atom().
+-type namespace() :: {atom()}.
 % compound
 -type limit() :: all | none | field() | [field()].
+-type acc_limit() :: all | none | field() | namespace() | [field() | namespace()].
 -type listentry() :: {module(), record_name(), [field()], limit()}.
 -type import_result() :: {imported, module(), record_name(), arity()}
                        | {overwritten, module(), record_name(), arity()}
@@ -86,11 +98,13 @@ get_list() ->
     lists:sort(Lst1).
 
 %% @doc set limits for accumulator
+-spec limit(mongoose_acc, acc_limit()) -> ok.
 limit(mongoose_acc, Limit) ->
     ensure_table_exists(),
     ets:insert(ets_table_name(), {{mongoose_acc, -1}, Limit}).
 
 %% @doc get limits for accumulator
+-spec limit(mongoose_acc) -> [acc_limit()].
 limit(mongoose_acc) ->
     ensure_table_exists(),
     case lookup_record(mongoose_acc, -1) of
@@ -133,7 +147,7 @@ process_acc(Acc) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-make_list_entry({{mongoose_acc, -1}, Limits}) ->
+make_list_entry({{mongoose_acc, -1}, _Limits}) ->
     false;
 make_list_entry({{Name, _}, Fields, Module, Limits}) ->
     FmtLimit = case Limits of
@@ -277,9 +291,13 @@ strip_acc(none, Acc) ->
     Acc;
 strip_acc(all, _Acc) ->
     #{};
+strip_acc(Fields, Acc) when is_list(Fields)->
+    maps:from_list(lists:foldl(fun(F, Flist) -> get_value_from_acc(F, Acc, Flist) end, [], Fields));
 strip_acc(Fields, Acc) ->
-    maps:from_list(lists:foldl(fun(F, Flist) -> get_value_from_acc(F, Acc, Flist) end, [], Fields)).
+    strip_acc([Fields], Acc).
 
+get_value_from_acc({NS}, Acc, Flist) ->
+    maps:fold(fun(K, V, Fl) -> get_namespaced_values(K, V, NS, Fl) end, Flist, Acc);
 get_value_from_acc(F, Acc, Flist) ->
     case maps:is_key(F, Acc) of
         true ->
@@ -287,6 +305,11 @@ get_value_from_acc(F, Acc, Flist) ->
         false ->
             Flist
     end.
+
+get_namespaced_values({NS, K}, V, NS, Fl) ->
+    [{{NS, K}, V} | Fl];
+get_namespaced_values(_, _, _, Fl) ->
+    Fl.
 
 %%%%%%%%%%%%%%%
 %%% HELPERS %%%
